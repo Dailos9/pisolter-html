@@ -1,0 +1,67 @@
+from flask import Flask, render_template, request, redirect, url_for
+from flask_socketio import SocketIO, emit, join_room, leave_room
+import time
+
+app = Flask(__name__, template_folder='tmp1')
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+players = {}
+ready_players = set()
+room = "game_room"  # La habitación donde los jugadores jugarán
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/game')
+def game():
+    return render_template('game.html')
+
+@app.route('/new_game')  # Nueva ruta para el template que se debe mostrar después de la cuenta regresiva
+def new_game():
+    return render_template('new_game_template.html')  # Aquí puedes poner el nombre de tu nuevo template
+
+@socketio.on('connect')
+def handle_connect():
+    if len(players) < 2:
+        players[request.sid] = len(players) + 1  # Asignar un número a cada jugador (1 o 2)
+        join_room(room)  # Unir al jugador a la sala
+        emit('player_number', players[request.sid], room=request.sid)
+    else:
+        emit('room_full', True)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    if request.sid in players:
+        del players[request.sid]
+        ready_players.discard(request.sid)
+        emit('player_left', True, room=room)
+
+@socketio.on('player_ready')
+def handle_player_ready():
+    ready_players.add(request.sid)  # Añadir jugador a la lista de "listos"
+    emit('player_ready_status', len(ready_players), room=room)
+    if len(ready_players) == 2:
+        countdown()
+
+@socketio.on('player_action')
+def handle_player_action(data):
+    # Aquí podrías actualizar la posición o el estado del juego en función de la acción del jugador
+    emit('update_game', data, room=room, include_self=False)
+
+@socketio.on('sync_position')
+def sync_position(data):
+    # Sincroniza la posición de los jugadores entre ellos
+    emit('update_position', data, room=room, include_self=False)
+
+def countdown():
+    # Aquí comienza la cuenta regresiva antes de iniciar el juego
+    for i in range(3, 0, -1):
+        socketio.emit('countdown', i, room=room)
+        socketio.sleep(1)  # Usamos socketio.sleep en lugar de time.sleep
+    socketio.emit('start_game', True, room=room)
+    # Enviar a todos a la nueva ruta después de la cuenta atrás
+    socketio.emit('redirect_to_new_game', room=room)
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=80, debug=True)
